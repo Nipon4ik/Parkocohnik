@@ -4,17 +4,19 @@ import cv2
 from PIL import Image
 from math import sqrt
 
-
 model = YOLO("best.pt")
 
 
 def calculate_center(xyxy):
+    """Вычесляет центр бокса"""
     x_center = (xyxy[0] + xyxy[2]) / 2
     y_center = (xyxy[1] + xyxy[3]) / 2
     return x_center, y_center
 
-def check_spaces(img_path) -> str:
+
+def check_spaces(img_path):
     """Проверяем наличие свободных мест по расстоянию между центрами прямоугольников."""
+    crop_image(img_path)
     results = model(img_path)
     occupied_centers = []
     for result in results:
@@ -48,8 +50,16 @@ def check_spaces(img_path) -> str:
 
     return False
 
+def crop_image(image_path):
+    "Обрезает фото"
+    # Загрузка изображения
+    image = Image.open(image_path)
 
-def make_photo(image_path,url):
+    # Сохраните обрезанное изображение
+    image = image.crop((794, 0, 1062, 850))
+    width, height = image.size
+    image.save(image_path)
+def make_photo(image_path, url):
     """Сделать фото с камеры и обрезать его."""
     # RTSP-URL камеры
     rtsp_url = url
@@ -75,20 +85,13 @@ def make_photo(image_path,url):
     # Загрузка изображения
     image = Image.open(image_path)
 
-    # Получите размеры изображения
-    width, height = image.size
-
-    mid_point = height // 2
-
-    # Сохраните обрезанное изображение
-    image = image.crop((794,0,1062,850))
-    width, height = image.size
     image.save(image_path)
 
-    print(f"Изображение обрезано и сохранено как {image_path}")
+    print(f"Изображение сохранено как {image_path}")
 
 
-def detect_cars(img_path, url) -> bool:
+def detect_cars(img_path, url):
+    """Собирает информацию"""
     make_photo(img_path, url)
     img = cv2.imread(img_path)
     if img is None:
