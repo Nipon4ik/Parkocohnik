@@ -1,5 +1,7 @@
 import config
 import aiofiles
+from alg import detect_cars, make_photo
+from PIL import Image
 from telegram import (
     Update,
     ReplyKeyboardMarkup
@@ -17,7 +19,7 @@ from telegram.ext import (
 
 user_saved_addresses = {}
 user_state = {}
-adress_for_remove = {}
+adress_for_action = {}
 
 new_parking_keyboard = ReplyKeyboardMarkup(
     keyboard=[["Новые парковки", "Добавленные парковки"],["Информация"]],
@@ -28,6 +30,7 @@ added_address_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         ["Просмотр свободных мест"],
         ["Удаление из списка адресов"],
+        ["Изображение с камеры"],
         ["Назад"]
     ],
     resize_keyboard=True
@@ -86,7 +89,7 @@ district_keyboard_novokosino = ReplyKeyboardMarkup(
 
 # --- Обработчики событий ---
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update,context):
     user = update.effective_user
     name = user.full_name
     await update.message.reply_text(
@@ -95,14 +98,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def new_parkings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def new_parkings(update,context):
     await update.message.reply_text(
         text="Выберите город:",
         reply_markup=city_keyboard
     )
 
 
-async def choose_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def choose_city(update):
     await update.message.reply_text(
         text="Выберите город из списка:",
         reply_markup=city_keyboard
@@ -110,7 +113,7 @@ async def choose_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[update.message.chat_id] = "choosing_city"
 
 
-async def city_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def city_selected(update, context):
     city = update.message.text
 
     if city == "Москва":
@@ -135,7 +138,7 @@ async def city_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def part_city_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def part_city_selected(update, context):
     part = update.message.text
     if part == "ВАО":
         async with aiofiles.open("Moscow/vao_images/vao_with_districts.jpg", 'rb') as photo_file:
@@ -156,7 +159,7 @@ async def part_city_selected(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("Меня пока нет, но обещаю появиться.")
 
 
-async def district_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def district_selected(update, context):
     district = update.message.text
     if district != "Новокосино":
         await update.message.reply_text("В этом районе пока не появился :(")
@@ -169,7 +172,7 @@ async def district_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[update.message.chat_id] = "street_select_vao"
 
 
-async def street_or_saved_address_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def street_or_saved_address_selected(update, context):
     user_id = update.message.chat_id
     address = update.message.text
     state = user_state.get(user_id)
@@ -191,7 +194,7 @@ async def street_or_saved_address_selected(update: Update, context: ContextTypes
 
     elif state == "choosing_action_with_saved_adress":
         if address in user_saved_addresses.get(user_id, []):
-            adress_for_remove[user_id] = address  # просто строка, не список!
+            adress_for_action[user_id] = address
             await update.message.reply_text(
                 text=f"Выберите действие с адресом: {address}",
                 reply_markup=added_address_keyboard
@@ -201,7 +204,7 @@ async def street_or_saved_address_selected(update: Update, context: ContextTypes
             await update.message.reply_text("Выберите адрес из списка.")
 
 
-async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def back(update, context):
     state = user_state.get(update.message.chat_id)
 
     if state == "choosing_city":
@@ -245,7 +248,7 @@ async def back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def added_addresses(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def added_addresses(update, context):
     user_id = update.message.chat_id
 
     if user_id not in user_saved_addresses or not user_saved_addresses[user_id]:
@@ -258,9 +261,9 @@ async def added_addresses(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     user_state[update.message.chat_id] = "choosing_action_with_saved_adress"
 
-async def del_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def del_ad(update, context):
     user_id = update.message.chat_id
-    selected_address = adress_for_remove.get(user_id)
+    selected_address = adress_for_action.get(user_id)
 
     if selected_address and user_id in user_saved_addresses:
         try:
@@ -269,7 +272,7 @@ async def del_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"Адрес {selected_address} удалён из ваших сохранённых.",
                 reply_markup=new_parking_keyboard
             )
-            adress_for_remove[user_id].remove(selected_address)
+            adress_for_action[user_id].remove(selected_address)
         except ValueError:
             await update.message.reply_text("Этот адрес не найден в вашем списке.")
     else:
@@ -278,7 +281,7 @@ async def del_ad(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_state[user_id] = "del_ad"
 
 
-def get_saved_addresses_keyboard(user_id: int) -> ReplyKeyboardMarkup:
+def get_saved_addresses_keyboard(user_id):
     addresses = user_saved_addresses.get(user_id, [])
 
     if not addresses:
@@ -291,12 +294,48 @@ def get_saved_addresses_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     keyboard.append(["Назад"])
 
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
-from alg import detect_cars
 
-
-async def get_inf_about_park_space(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def take_photo(update, context):
     user_id = update.message.chat_id
-    selected_address = adress_for_remove.get(user_id)
+    selected_address = adress_for_action.get(user_id)
+    if selected_address and user_id in user_saved_addresses:
+        if selected_address == "Мирской проезд дом 6":
+            for i in range(0, len(config.Mrsk_pr)):
+                img_path = f"Moscow/vao_images/Novokosino/Mirskoy6_{i}.jpeg"
+                url = config.Mrsk_pr[i]
+                make_photo(img_path,url)
+                image = Image.open(img_path)
+                image = image.crop((0,0,image.width,image.height/2))
+                image.save(img_path)
+                async with aiofiles.open(img_path, 'rb') as photo_file:
+                    photo_data = await photo_file.read()
+                await update.message.reply_text(
+                    text=f'Изображение с камеры {i+1} по адрессу {selected_address}'
+                )
+                await context.bot.send_photo(
+                    chat_id=update.message.chat_id,
+                    photo=photo_data
+                )
+    if user_id in adress_for_action:
+        if isinstance(adress_for_action[user_id], list):
+            if selected_address in adress_for_action[user_id]:
+                adress_for_action[user_id].remove(selected_address)
+                if not adress_for_action[user_id]:
+                    del adress_for_action[user_id]
+        else:
+            del adress_for_action[user_id]
+        user_state[update.message.chat_id] = ""
+        await update.message.reply_text(
+            text="Выберите действие",
+            reply_markup=new_parking_keyboard
+        )
+
+
+
+
+async def get_inf_about_park_space(update, context):
+    user_id = update.message.chat_id
+    selected_address = adress_for_action.get(user_id)
     parks_with_space = []
 
     if selected_address and user_id in user_saved_addresses:
@@ -329,24 +368,24 @@ async def get_inf_about_park_space(update: Update, context: ContextTypes.DEFAULT
         )
 
     # Удаление использованного адреса
-    if user_id in adress_for_remove:
+    if user_id in adress_for_action:
         # Убедимся, что это список
-        if isinstance(adress_for_remove[user_id], list):
-            if selected_address in adress_for_remove[user_id]:
-                adress_for_remove[user_id].remove(selected_address)
+        if isinstance(adress_for_action[user_id], list):
+            if selected_address in adress_for_action[user_id]:
+                adress_for_action[user_id].remove(selected_address)
                 # Если список опустел — удалим ключ
-                if not adress_for_remove[user_id]:
-                    del adress_for_remove[user_id]
+                if not adress_for_action[user_id]:
+                    del adress_for_action[user_id]
         else:
             # Если по ошибке там не список — удалим ключ
-            del adress_for_remove[user_id]
+            del adress_for_action[user_id]
         user_state[update.message.chat_id] = ""
         await update.message.reply_text(
             text="Выберите действие",
             reply_markup=new_parking_keyboard
         )
 
-async def get_inf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def get_inf(update,context):
     text = """
 
         Parkovochnik — это Telegram-бот, который помогает пользователям находить свободные парковочные места в выбранных районах Москвы. Бот анализирует изображения с камер в реальном времени и сообщает, где есть доступные места для парковки.
@@ -396,6 +435,7 @@ if __name__ == '__main__':
     app.add_handler(MessageHandler(filters.Regex('^Добавленные парковки$'), added_addresses))
     app.add_handler(MessageHandler(filters.Regex('^Просмотр свободных мест$'), get_inf_about_park_space))
     app.add_handler(MessageHandler(filters.Regex('^Информация$'),get_inf))
+    app.add_handler(MessageHandler(filters.Regex('^Изображение с камеры$'),take_photo))
 
     app.add_handler(
         MessageHandler(
